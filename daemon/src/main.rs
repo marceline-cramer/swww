@@ -4,8 +4,9 @@
 
 mod animations;
 pub mod bump_pool;
+mod gpu;
 mod wallpaper;
-use log::{debug, error, info, warn, LevelFilter};
+use log::{debug, error, info, LevelFilter};
 use nix::{
     poll::{poll, PollFd, PollFlags},
     sys::signal::{self, SigHandler, Signal},
@@ -28,16 +29,15 @@ use std::{
 };
 
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState, Region},
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
+    compositor::{CompositorHandler, CompositorState},
+    delegate_compositor, delegate_layer, delegate_output, delegate_registry,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     shell::{
-        wlr_layer::{Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
+        wlr_layer::{LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
         WaylandSurface,
     },
-    shm::{Shm, ShmHandler},
 };
 
 use wayland_client::{
@@ -90,7 +90,7 @@ fn main() -> Result<(), String> {
         registry_queue_init(&conn).expect("failed to initialize the event queue");
     let qh = event_queue.handle();
 
-    let mut daemon = Daemon::new(&globals, &qh);
+    let mut daemon = Daemon::new(&conn, &globals, &qh);
 
     if let Ok(true) = sd_notify::booted() {
         if let Err(e) = sd_notify::notify(true, &[sd_notify::NotifyState::Ready]) {
@@ -229,11 +229,12 @@ impl Drop for SocketWrapper {
 
 struct Daemon {
     // Wayland stuff
-    layer_shell: LayerShell,
     compositor_state: CompositorState,
     registry_state: RegistryState,
     output_state: OutputState,
-    shm: Shm,
+
+    // hardware acceleration
+    surface: gpu::GpuSurface,
 
     // swww stuff
     wallpapers: Vec<Arc<Wallpaper>>,
@@ -242,15 +243,13 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn new(globals: &GlobalList, qh: &QueueHandle<Self>) -> Self {
+    fn new(conn: &Connection, globals: &GlobalList, qh: &QueueHandle<Self>) -> Self {
         // The compositor (not to be confused with the server which is commonly called the compositor) allows
         // configuring surfaces to be presented.
         let compositor_state =
             CompositorState::bind(globals, qh).expect("wl_compositor is not available");
 
-        let layer_shell = LayerShell::bind(globals, qh).expect("layer shell is not available");
-
-        let shm = Shm::bind(globals, qh).expect("wl_shm is not available");
+        let surface = gpu::GpuSurface::new(conn, &compositor_state, globals, qh);
 
         Self {
             // Outputs may be hotplugged at runtime, therefore we need to setup a registry state to
@@ -258,9 +257,7 @@ impl Daemon {
             registry_state: RegistryState::new(globals),
             output_state: OutputState::new(globals, qh),
             compositor_state,
-            shm,
-            layer_shell,
-
+            surface,
             wallpapers: Vec::new(),
             animator: Animator::new(),
             initializing: true,
@@ -412,16 +409,6 @@ impl CompositorHandler for Daemon {
             }
         }
     }
-
-    fn transform_changed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_transform: wl_output::Transform,
-    ) {
-        // do not do anything for now
-    }
 }
 
 impl OutputHandler for Daemon {
@@ -435,52 +422,9 @@ impl OutputHandler for Daemon {
         qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        if let Some(output_info) = self.output_state.info(&output) {
-            let surface = self.compositor_state.create_surface(qh);
-
-            // Wayland clients are expected to render the cursor on their input region.
-            // By setting the input region to an empty region, the compositor renders the
-            // default cursor. Without this, an empty desktop won't render a cursor.
-            if let Ok(region) = Region::new(&self.compositor_state) {
-                surface.set_input_region(Some(region.wl_region()));
-            }
-            let layer_surface = self.layer_shell.create_layer_surface(
-                qh,
-                surface,
-                Layer::Background,
-                Some("swww"),
-                Some(&output),
-            );
-
-            if !self.initializing {
-                if let Some(name) = &output_info.name {
-                    let name = name.to_owned();
-                    if let Err(e) = std::thread::Builder::new()
-                        .name("cache loader".to_string())
-                        .stack_size(1 << 14)
-                        .spawn(move || {
-                            // Wait for a bit for the output to be properly configured and stuff
-                            // this is obviously not ideal, but it solves the vast majority of problems
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            if let Err(e) = utils::cache::load(&name) {
-                                warn!("failed to load cache: {e}");
-                            }
-                        })
-                    {
-                        warn!("failed to spawn `cache loader` thread: {e}");
-                    }
-                }
-            }
-
-            debug!("New output: {output_info:?}");
-            self.wallpapers.push(Arc::new(Wallpaper::new(
-                output_info,
-                layer_surface,
-                &self.shm,
-                qh,
-            )));
-            debug!("Output count: {}", self.wallpapers.len());
-        }
+        // TODO implement multiple outputs.
+        // hard part is that wgpu state may need to be reinitialized if the
+        // adapter is different (which I'm not sure how to determine).
     }
 
     fn update_output(
@@ -523,12 +467,6 @@ impl OutputHandler for Daemon {
             self.wallpapers.retain(|w| !w.has_id(output_info.id));
             debug!("Destroyed output: {output_info:?}");
         }
-    }
-}
-
-impl ShmHandler for Daemon {
-    fn shm_state(&mut self) -> &mut Shm {
-        &mut self.shm
     }
 }
 
@@ -578,7 +516,6 @@ impl Dispatch<WlBuffer, Arc<AtomicBool>> for Daemon {
 
 delegate_compositor!(Daemon);
 delegate_output!(Daemon);
-delegate_shm!(Daemon);
 
 delegate_layer!(Daemon);
 
