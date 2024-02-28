@@ -43,7 +43,7 @@ extern "C" {
 }
 
 /// This struct represents the cached difference between the previous frame and the next
-#[derive(Archive, Serialize, Deserialize)]
+#[derive(Debug, Archive, Serialize, Deserialize)]
 pub struct BitPack {
     inner: Box<[u8]>,
     /// This field will ensure we won't ever try to unpack the images on a buffer of the wrong size,

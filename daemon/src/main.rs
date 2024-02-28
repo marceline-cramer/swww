@@ -274,6 +274,7 @@ impl Daemon {
             }
         };
         let request = Request::receive(&bytes);
+        debug!("received request: {request:?}");
         let answer = match request {
             ArchivedRequest::Animation(animations) => {
                 let mut wallpapers = Vec::new();

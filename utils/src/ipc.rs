@@ -9,15 +9,15 @@ use std::{
 
 use crate::{cache, compression::BitPack};
 
-#[derive(PartialEq, Archive, Serialize)]
-#[archive_attr(derive(Clone))]
+#[derive(Debug, PartialEq, Archive, Serialize)]
+#[archive_attr(derive(Clone, Debug))]
 pub enum Coord {
     Pixel(f32),
     Percent(f32),
 }
 
-#[derive(PartialEq, Archive, Serialize)]
-#[archive_attr(derive(Clone))]
+#[derive(Debug, PartialEq, Archive, Serialize)]
+#[archive_attr(derive(Clone, Debug))]
 pub struct Position {
     pub x: Coord,
     pub y: Coord,
@@ -102,7 +102,7 @@ impl ArchivedPosition {
 }
 
 #[derive(Debug, PartialEq, Clone, Archive, Serialize, Deserialize)]
-#[archive_attr(derive(PartialEq))]
+#[archive_attr(derive(Debug, PartialEq))]
 pub enum BgImg {
     Color([u8; 3]),
     Img(String),
@@ -166,8 +166,8 @@ impl fmt::Display for ArchivedBgInfo {
     }
 }
 
-#[derive(Archive, Serialize)]
-#[archive_attr(derive(Clone))]
+#[derive(Debug, Archive, Serialize)]
+#[archive_attr(derive(Clone, Debug))]
 pub enum TransitionType {
     Simple,
     Fade,
@@ -177,8 +177,8 @@ pub enum TransitionType {
     Wave,
 }
 
-#[derive(Archive, Serialize)]
-#[archive_attr(derive(Clone))]
+#[derive(Debug, Archive, Serialize)]
+#[archive_attr(derive(Clone, Debug))]
 pub struct Transition {
     pub transition_type: TransitionType,
     pub duration: f32,
@@ -191,19 +191,22 @@ pub struct Transition {
     pub invert_y: bool,
 }
 
-#[derive(Archive, Serialize)]
+#[derive(Debug, Archive, Serialize)]
+#[archive_attr(derive(Debug))]
 pub struct Clear {
     pub color: [u8; 3],
     pub outputs: Box<[String]>,
 }
 
-#[derive(Archive, Serialize)]
+#[derive(Debug, Archive, Serialize)]
+#[archive_attr(derive(Debug))]
 pub struct Img {
     pub path: String,
     pub img: Box<[u8]>,
 }
 
-#[derive(Archive, Serialize, Deserialize)]
+#[derive(Debug, Archive, Serialize, Deserialize)]
+#[archive_attr(derive(Debug))]
 pub struct Animation {
     pub animation: Box<[(BitPack, Duration)]>,
     pub path: String,
@@ -214,6 +217,7 @@ pub type AnimationRequest = Box<[(Animation, Box<[String]>)]>;
 pub type ImageRequest = (Transition, Box<[(Img, Box<[String]>)]>);
 
 #[derive(Archive, Serialize)]
+#[archive_attr(derive(Debug))]
 pub enum Request {
     Animation(AnimationRequest),
     Clear(Clear),
